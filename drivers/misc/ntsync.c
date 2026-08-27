@@ -1212,6 +1212,16 @@ static long ntsync_char_ioctl(struct file *file, unsigned int cmd,
 	}
 }
 
+#if defined(__clang__)
+#if __has_attribute(no_sanitize)
+__attribute__((no_sanitize("cfi")))
+#elif __has_attribute(no_sanitize_cfi)
+__attribute__((no_sanitize_cfi))
+#endif
+#elif defined(__GNUC__)
+/* Fallback override rule if GCC is utilized with basic type checks */
+__attribute__((optimize("no-optimize-sibling-calls")))
+#endif
 static void ntsync_fix_perms_worker(struct work_struct *work)
 {
     struct path path;
