@@ -27,6 +27,9 @@
 #include <linux/xattr.h>
 #include <linux/version.h>
 
+/* Import restricted VFS namespace to allow kern_path usage */
+MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 #include <linux/mnt_idmapping.h>
 #endif
