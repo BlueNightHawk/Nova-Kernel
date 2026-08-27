@@ -26,6 +26,7 @@
 #include <linux/path.h>
 #include <linux/xattr.h>
 #include <linux/version.h>
+#include <linux/kprobes.h>
 
 /* Import restricted VFS namespace to allow kern_path usage */
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
@@ -1215,18 +1216,41 @@ static void ntsync_fix_perms_worker(struct work_struct *work)
 {
     struct path path;
     char *ctx = "u:object_r:gpu_device:s0";
+    int ret = -ENOENT;
+    int (*setxattr_noperm)(struct dentry *, const char *, const void *, size_t, int) = NULL;
+    struct kprobe kp = {
+        .symbol_name = "__vfs_setxattr_noperm",
+    };
+
+    ret = register_kprobe(&kp);
+    if (ret < 0) {
+        pr_err("ntsync: Failed to register kprobe, error %d\n", ret);
+        return;
+    }
+    setxattr_noperm = (void *)kp.addr;
+    unregister_kprobe(&kp);
+
+    if (!setxattr_noperm) {
+        pr_err("ntsync: Could not resolve __vfs_setxattr_noperm address\n");
+        return;
+    }
+
     if (!kern_path("/dev/ntsync", LOOKUP_FOLLOW, &path)) {
         struct inode *inode = d_backing_inode(path.dentry);
         if (inode) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,12,0)
-             __vfs_setxattr_noperm(path.dentry, "security.selinux", ctx, strlen(ctx) + 1, 0);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6,3,0)
-            __vfs_setxattr_noperm(&init_user_ns, path.dentry, "security.selinux", ctx, strlen(ctx) + 1, 0);
-#else
-            __vfs_setxattr_noperm(&nop_mnt_idmap, path.dentry, "security.selinux", ctx, strlen(ctx) + 1, 0);
-#endif
-            inode->i_mode = (inode->i_mode & ~S_IALLUGO) | 0666;
-            pr_info("ntsync: Applied 0666 and gpu_device context\n");
+            inode_lock(inode);
+            
+            ret = setxattr_noperm(path.dentry, "security.selinux", ctx, strlen(ctx) + 1, 0);
+
+            if (ret < 0) {
+                pr_err("ntsync: Failed to set security.selinux context, error %d\n", ret);
+            } else {
+                inode->i_mode = (inode->i_mode & ~S_IALLUGO) | 0666;
+                mark_inode_dirty(inode);
+                pr_info("ntsync: Applied 0666 and gpu_device context\n");
+            }
+
+            inode_unlock(inode);
         }
         path_put(&path);
     }
